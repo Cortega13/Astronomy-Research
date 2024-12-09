@@ -2,7 +2,7 @@ Validation Loss Definition
 
 loss = abs(actual - predicted) / actual
 
-This loss is calculated for each species and then the mean is calculated. This is calculated for the entire validation set.
+This loss is calculated for each species and then the mean is calculated. This is calculated for the entire validation set. The species abundances range from 1e-20 to 1. 
 
 Current mean loss for variational autoencoder: 5.2204e-01
 Current STD of loss for variational autoencoder: 4.2515e-01
