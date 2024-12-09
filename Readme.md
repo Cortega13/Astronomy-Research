@@ -11,7 +11,7 @@ Current mean loss for 1 timestep with emulator: 2.4885e+03
 Current std of loss for 1 timestep with emulator: 4.4960e+04
 
 20 Worst performing species after encoding and decoding:
-H3OPlus     1.332775
+H3OPlus     1.332775 \n
 N2          1.341790
 CLPlus      1.345040
 C3Plus      1.366286
