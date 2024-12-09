@@ -1,0 +1,6 @@
+tables
+numpy
+pandas
+optuna
+scikit-learn
+joblib
