@@ -231,7 +231,7 @@ def load_objects():
 
 
 def main(validation_dataset, batch_size=4192):
-    timesteps = 1
+    timesteps = 0
     autoencoder, emulator, scalers = load_objects()
     inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps)
     
