@@ -26,12 +26,12 @@ def load_configurations(WORKING_PATH):
         "weight_decay": 0,
         "batch_size": 2*4096,
         "shuffle": True,
-        "early_stopping_tolerance": 12,
+        "early_stopping_tolerance": 15,
         "max_epochs": 999999,
         "hidden_layer": 200,
         "max_clipping": 6,
-        "dropout_rate": 0.005,
-        "exponential_coefficient": 18,
+        "dropout_rate": 0.002,
+        "exponential_coefficient": 18.6,
     }
     METADATA = ["Time", "Model"] 
     PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
@@ -208,7 +208,7 @@ class Trainer:
             self.epochs_without_improvement = 0
         else:
             self.epochs_without_improvement += 1
-            print(f"Total stagnant epochs: {self.epochs_without_improvement}")
+            print(f"Total stagnant epochs: {self.epochs_without_improvement} | Minimum Loss: {self.minimum_loss:.4e}")
         self.total_loss = 0
 
 
@@ -369,3 +369,21 @@ if __name__ == "__main__":
 # 8.8672e+02
 
 # 7.5997e+02
+
+
+# 6.9784e+02 exp=18 beta=3 do=0.002 hl=200 mclip=6
+# 6.9933e+02
+# 6.8848e+02 exp=18.2
+# 6.8520e+02 exp=18.6
+# 7.3875e+02 exp=19
+
+# 8.9013e+02 exp=18 beta=5 do=0.002 hl=200 mclip=6
+
+# 7.4806e+02 exp=18.5 beta=3 do=0 hl=200 mclip=6
+
+# 7.2031e+02 exp=17.5 beta=3 do=0 hl=200 mclip=5
+# 9.9194e+02 exp=18 beta=4 do=0 hl=200 mclip=7
+
+# 7.6193e+02 exp=18 beta=3 do=0 hl=200 mclip=3
+
+# 9.5211e+02 exp=17.5 beta=3 do=0 hl=200 mclip=3

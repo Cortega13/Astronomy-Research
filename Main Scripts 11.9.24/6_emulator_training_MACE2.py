@@ -27,8 +27,6 @@ HP = {
     "shuffle": True,
     "early_stopping_tolerance": 12,
     "max_epochs": 999999,
-    "gaussian_noise_std": 0.005,
-    "layer_sizes": [15, 256, 256, 11],
     "hidden_layer": 200,
     "max_clipping": 4,
 }
@@ -43,8 +41,8 @@ def load_datasets(path):
     training_dataset_path = os.path.join(path, "Datasets/training.h5")
     validation_dataset_path = os.path.join(path, "Datasets/validation.h5")
 
-    training_dataset = pd.read_hdf(training_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
-    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
+    training_dataset = pd.read_hdf(training_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
+    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
     training_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     validation_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     
@@ -95,19 +93,15 @@ def create_emulator_dataset(df, timesteps=1):
     inputs, outputs = [], []
     
     for _, sub_df in df.groupby('Model'):
-        differences = (sub_df["Time"].diff()).dropna()
-        if not (differences == 1000).all():
-            print("Time differences not equal to 1000.")
-            continue
         sub_array = sub_df[PHYSICAL_PARAMETERS + COMPONENTS].to_numpy()
         
         num_rows = len(sub_array)
         if num_rows > timesteps:
             input_window = sub_array[:-timesteps]
-            output_window = sub_array[timesteps:, -len(COMPONENTS):]
+            output_window = sub_array[timesteps:, :]
             if timesteps == 0:
                 input_window = sub_array
-                output_window = sub_array[:, -len(COMPONENTS):]
+                output_window = sub_array[:, :]
             
             inputs.append(input_window)
             outputs.append(output_window)
@@ -206,41 +200,85 @@ def tensor_to_dataloader(tensor_dataset, rank, world_size):
     return dataloader
 
 
-class GaussianNoise(nn.Module):
-    def __init__(self, mean=0., std=0):
-        super(GaussianNoise, self).__init__()
-        self.mean = mean
-        self.std = std
+class A(nn.Module):
+    """
+    Neural network that constructs a matrix A from the output layer, 
+    starting from the physical input of the chemistry model.
+    """
+    def __init__(self, input_dim, z_dim):
+        super(A, self).__init__()
 
-    def forward(self, x):
-        if self.training:
-            noise = torch.randn_like(x) * self.std + self.mean
-            return x + noise
-        return x
+        self.z_dim = z_dim
+
+        hidden_dim1 = z_dim
+        out_dim = z_dim**2
+        hidden_dim2 = out_dim//2
+
+        self.layer_in = nn.Linear( input_dim, hidden_dim1)
+        self.layer_hidden = nn.Linear(hidden_dim1,hidden_dim2)
+        self.layer_out = nn.Linear(hidden_dim2, out_dim)
+
+        self.layer_out.weight.data = torch.zeros_like(self.layer_out.weight)
+        # print(self.layer_out.bias.data.shape)
+        bias = torch.diag(-torch.ones(z_dim))
+        self.layer_out.bias.data = bias.ravel()
+        self.layer_hidden.weight.requires_grad_(True)
+        self.layer_hidden.bias.requires_grad_(True)
+
+        
+        self.LeakyReLU = nn.LeakyReLU(0.2)
+        
+    def forward(self, p):
+        h = self.LeakyReLU(self.layer_in(p))
+        h = self.LeakyReLU(self.layer_hidden(h))
+        h = self.LeakyReLU(self.layer_out(h))
+        return h.reshape(self.z_dim,self.z_dim) ## vierkant
 
 
-class Emulator(nn.Module):
-    def __init__(self, layer_sizes, noise_mean=0, noise_std=0):
-        super(Emulator, self).__init__()
-        self.gaussiannoise = GaussianNoise(mean=noise_mean, std=noise_std)
-        self.layers = nn.ModuleList()
-        for i in range(len(layer_sizes) - 1):
-            self.layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
-        self.activation = nn.ReLU()
-        self.final_activation = nn.Sigmoid()
+class B(nn.Module):
+    """
+    Neural network that constructs a tensor B from the output layer, 
+    starting from the physical input of the chemistry model.
+    """
+    def __init__(self, input_dim, z_dim):
+        super(B, self).__init__()
 
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            if i < len(self.layers) - 1:
-                if i == 0:
-                    x = self.gaussiannoise(layer(x))
-                else:
-                    x = layer(x)
-                x = F.relu(x)
-            else:
-                x = layer(x)
-                x = self.final_activation(x)
-        return x
+        self.z_dim = z_dim
+
+        hidden_dim1 = z_dim
+        out_dim = z_dim**3
+        hidden_dim2 = int(np.sqrt(out_dim))
+        hidden_dim3 = out_dim//2
+
+        self.layer_in = nn.Linear( input_dim, hidden_dim1)
+        self.layer_hidden1 = nn.Linear(hidden_dim1,hidden_dim2)
+        self.layer_hidden2 = nn.Linear(hidden_dim2,hidden_dim3)
+        self.layer_out = nn.Linear(hidden_dim3, out_dim)
+        
+        self.LeakyReLU = nn.LeakyReLU(0.2)
+        
+    def forward(self, p):
+        h = self.LeakyReLU(self.layer_in(p))
+        h = self.LeakyReLU(self.layer_hidden1(h))
+        h = self.LeakyReLU(self.layer_hidden2(h))
+        h = self.LeakyReLU(self.layer_out(h))
+        return h.reshape(self.z_dim,self.z_dim,self.z_dim)
+    
+
+class Gnn(nn.Module):
+    '''
+    g(z,p) is a function. 
+    '''
+    def __init__(self, p_dim, z_dim):
+        super(Gnn, self).__init__()
+        self.a = A(p_dim, z_dim)  
+        self.b = B(p_dim, z_dim)   
+
+    def forward(self, z):
+        A = self.a(p)       
+        B = self.b(p)
+
+        return torch.einsum("ij, bj -> bi", A, z) + torch.einsum("ijk, bj, bk -> bi", B, z, z)  ## b is de index vd batchsize
 
 
 ### Training Functions in Trainer Class
@@ -274,7 +312,7 @@ class Trainer:
     def _save_checkpoint(self):
         print(f"Saving model with new minimum loss: {self.minimum_loss}.")
         checkpoint = self.model.module.state_dict()
-        PATH = os.path.join(WORKING_PATH, "Weights/emulator.pth")
+        PATH = os.path.join(WORKING_PATH, "Weights/Gemulator.pth")
         torch.save(checkpoint, PATH)
 
 
@@ -357,9 +395,9 @@ def ddp_setup(rank, world_size):
 
 
 def load_training_objects(rank):
-    model = Emulator(
-        layer_sizes=HP["layer_sizes"],
-        noise_std = HP["gaussian_noise_std"],
+    model = Gnn(
+        p_dim=4,
+        z_dim=11,
         ).to(rank)
     
     model = DDP(

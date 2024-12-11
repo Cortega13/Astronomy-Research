@@ -173,29 +173,7 @@ class VariationalAutoencoder(nn.Module):
         return x_reconstructed, mu, logvar
 
 
-### Defining the Emulator.
-class GaussianNoise(nn.Module):
-    def __init__(self, mean=0., std=0):
-        super(GaussianNoise, self).__init__()
-        self.mean = mean
-        self.std = std
 
-    def forward(self, x):
-        if self.training:
-            noise = torch.randn_like(x) * self.std + self.mean
-            return x + noise
-        return x
-
-
-class Emulator(nn.Module):
-    def __init__(self, layer_sizes, noise_mean=0, noise_std=0):
-        super(Emulator, self).__init__()
-        self.gaussiannoise = GaussianNoise(mean=noise_mean, std=noise_std)
-        self.layers = nn.ModuleList()
-        for i in range(len(layer_sizes) - 1):
-            self.layers.append(nn.Linear(layer_sizes[i], layer_sizes[i+1]))
-        self.activation = nn.ReLU()
-        self.final_activation = nn.Sigmoid()  # Constrain outputs to [0, 1]
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
@@ -210,6 +188,16 @@ class Emulator(nn.Module):
                 x = self.final_activation(x)
         return x
 
+class G(nn.Module):
+    def __init__(self, z_dim=11):
+        super(G, self).__init__()
+        self.C = nn.Parameter(torch.randn(z_dim).requires_grad_(True))
+        self.A = nn.Parameter(torch.randn(z_dim, z_dim).requires_grad_(True))
+        self.B = nn.Parameter(torch.randn(z_dim, z_dim, z_dim).requires_grad_(True))
+
+    def forward(self, z):
+        return self.C + torch.einsum("ij, bj -> bi", self.A, z) + torch.einsum("ijk, bj, bk -> bi", self.B, z, z)
+
 
 def load_objects():
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
@@ -221,17 +209,17 @@ def load_objects():
     autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/vae.pth")))
     autoencoder.eval()
     
-    emulator = Emulator(
-        layer_sizes=HP["layer_sizes"],
+    emulator = G(
+        z_dim=len(COMPONENTS)+len(PHYSICAL_PARAMETERS),
     ).to(device)
-    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/emulator.pth")))
+    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/Gemulator.pth")))
     emulator.eval()
     
     return autoencoder, emulator, scalers
 
 
 def main(validation_dataset, batch_size=4192):
-    timesteps = 1
+    timesteps = 0
     autoencoder, emulator, scalers = load_objects()
     inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps)
     
@@ -243,7 +231,6 @@ def main(validation_dataset, batch_size=4192):
             batch = preencoded_inputs[batch_start:batch_end]
             batch = batch.to(device)
             batch_encoded, _ = autoencoder.encode(batch)
-            #batch_encoded = batch+encoded + torch.randn_like(batch_encoded) * 0.1
             encoded_inputs.append(batch_encoded)
         encoded_inputs = torch.cat(encoded_inputs, dim=0)
         
@@ -255,7 +242,7 @@ def main(validation_dataset, batch_size=4192):
                 batch_end = min(batch_start + batch_size, len(encoded_inputs))
                 batch = encoded_inputs[batch_start:batch_end]
                 batch = batch.to(device)
-                batch_outputs = emulator(batch)
+                batch_outputs = emulator(batch)[:, 4:]
                 emulator_outputs.append(batch_outputs)
             emulator_outputs = torch.cat(emulator_outputs, dim=0)
             encoded_inputs = emulator_postprocessing(scalers, emulator_outputs)

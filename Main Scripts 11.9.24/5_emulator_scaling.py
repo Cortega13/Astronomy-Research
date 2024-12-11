@@ -27,8 +27,7 @@ HP = {
     "early_stopping_tolerance": 7,
     "max_epochs": 999999,
     "gaussian_noise_std": 0,
-    "layer_sizes": [15, 40, 40, 40, 11],
-    "hidden_layer": 1800
+    "hidden_layer": 200
 }
 
 METADATA = ["Time", "Model"] 
