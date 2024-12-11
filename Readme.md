@@ -16,6 +16,9 @@ Current std of loss for 10 timesteps with FFN emulator: 1.9440e+07
 Current mean loss for 1 timestep with Mace ODEs: 3.7718e+03
 Current std of loss for 1 timestep with Mace ODEs: 6.7567e+04
 
+Current mean loss for 1 timestep with Mace ODEs: 1.8685e+03
+Current std of loss for 1 timestep with Mace ODEs: 3.3163e+04
+
 Error of 6 Worst performing species after emulating 1 timestep:
 
 NH             522.993042

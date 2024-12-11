@@ -35,7 +35,7 @@ COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
 ### Data Processing Functions
 def load_datasets(path):
     validation_dataset_path = os.path.join(path, "Datasets/validation.h5")
-    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
+    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
     validation_dataset = validation_dataset[METADATA + PHYSICAL_PARAMETERS + TOTAL_SPECIES]
     
     return validation_dataset
@@ -272,7 +272,9 @@ def main(validation_dataset, batch_size=4192):
         decoded_outputs = autoencoder_postprocessing(scalers, decoded_outputs)
 
     percent_error = ((abs(validation[TOTAL_SPECIES] - decoded_outputs[TOTAL_SPECIES])) / validation[TOTAL_SPECIES])
-    print("Error", percent_error.mean().sort_values(ascending=True).iloc[-20:])
+    print("Error", percent_error.mean().sort_values(ascending=True).iloc[-40:20])
+    print(validation["NH"])
+    print(decoded_outputs["NH"])
     print(f"Average Error: {percent_error.mean().mean():.4e}")
     print(f"STD Error: {percent_error.mean().std():.4e}")
 

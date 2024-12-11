@@ -41,8 +41,8 @@ def load_datasets(path):
     training_dataset_path = os.path.join(path, "Datasets/training.h5")
     validation_dataset_path = os.path.join(path, "Datasets/validation.h5")
 
-    training_dataset = pd.read_hdf(training_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
-    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
+    training_dataset = pd.read_hdf(training_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
+    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
     training_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     validation_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     
@@ -98,10 +98,10 @@ def create_emulator_dataset(df, timesteps=1):
         num_rows = len(sub_array)
         if num_rows > timesteps:
             input_window = sub_array[:-timesteps]
-            output_window = sub_array[timesteps:, :]
+            output_window = sub_array[timesteps:, -len(COMPONENTS):]
             if timesteps == 0:
                 input_window = sub_array
-                output_window = sub_array[:, :]
+                output_window = sub_array[:, -len(COMPONENTS):]
             
             inputs.append(input_window)
             outputs.append(output_window)
@@ -275,6 +275,8 @@ class Gnn(nn.Module):
         self.b = B(p_dim, z_dim)   
 
     def forward(self, z):
+        p = z[:,:4][0]
+        z = z[:,4:]
         A = self.a(p)       
         B = self.b(p)
 
@@ -312,7 +314,7 @@ class Trainer:
     def _save_checkpoint(self):
         print(f"Saving model with new minimum loss: {self.minimum_loss}.")
         checkpoint = self.model.module.state_dict()
-        PATH = os.path.join(WORKING_PATH, "Weights/Gemulator.pth")
+        PATH = os.path.join(WORKING_PATH, "Weights/Gnnemulator.pth")
         torch.save(checkpoint, PATH)
 
 

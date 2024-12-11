@@ -143,7 +143,6 @@ class VariationalAutoencoder(nn.Module):
         return x_reconstructed, mu, logvar
 
 
-
 ### Defining the VAE Loss Function
 def vae_loss(reconstructed_x, x, mu, logvar, beta=3):
     elementwise_loss = torch.abs(reconstructed_x - x)*((x+3e-2)**0.2)
