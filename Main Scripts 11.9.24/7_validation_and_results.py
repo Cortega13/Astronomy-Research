@@ -35,7 +35,7 @@ COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
 ### Data Processing Functions
 def load_datasets(path):
     validation_dataset_path = os.path.join(path, "Datasets/validation.h5")
-    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0, stop=5000).astype(np.float32).reset_index(drop=True)
+    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
     validation_dataset = validation_dataset[METADATA + PHYSICAL_PARAMETERS + TOTAL_SPECIES]
     
     return validation_dataset
@@ -224,16 +224,16 @@ def load_objects():
     emulator = Emulator(
         layer_sizes=HP["layer_sizes"],
     ).to(device)
-    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/emulator.pth")))
+    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/10emulator.pth")))
     emulator.eval()
     
     return autoencoder, emulator, scalers
 
 
 def main(validation_dataset, batch_size=4192):
-    timesteps = 1
+    timesteps = 8
     autoencoder, emulator, scalers = load_objects()
-    inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps)
+    inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps*10)
     
     with torch.no_grad():
         preencoded_inputs = autoencoder_preprocessing(scalers, inputs[TOTAL_SPECIES])
@@ -272,9 +272,12 @@ def main(validation_dataset, batch_size=4192):
         decoded_outputs = autoencoder_postprocessing(scalers, decoded_outputs)
 
     percent_error = ((abs(validation[TOTAL_SPECIES] - decoded_outputs[TOTAL_SPECIES])) / validation[TOTAL_SPECIES])
-    print("Error", percent_error.mean().sort_values(ascending=True).iloc[-40:20])
-    print(validation["NH"])
-    print(decoded_outputs["NH"])
+    validation[TOTAL_SPECIES] = np.clip(validation[TOTAL_SPECIES], 1e-20, 0.85, dtype=np.float32)
+    
+    maceerror = abs((np.log10(validation[TOTAL_SPECIES]) - np.log10(decoded_outputs[TOTAL_SPECIES])) / np.log10(validation[TOTAL_SPECIES]))
+    
+    print("Error", percent_error.mean().sort_values(ascending=True).iloc[-20:])
+    print("Mace Error: ", maceerror.sum(axis=1).mean())
     print(f"Average Error: {percent_error.mean().mean():.4e}")
     print(f"STD Error: {percent_error.mean().std():.4e}")
 
