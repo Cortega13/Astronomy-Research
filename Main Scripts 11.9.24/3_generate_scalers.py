@@ -22,12 +22,14 @@ CALCULATION_DIVISIONS = 10
 with pd.HDFStore(os.path.join(WORKING_PATH, "datasets/uclchem_rawdata.h5"), mode='r') as store:
     dataset_size = int(store.get_storer('models').nrows)
 print(f"-=+=- Dataset Size: {dataset_size} -=+=-")
-# dataset_size = 1000
 
 global_min = pd.Series(dtype='float32')
 global_max = pd.Series(dtype='float32')
 
-scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
+try:
+    scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
+except:
+    scalers = {}
 for i in tqdm(range(CALCULATION_DIVISIONS), desc="Calculating Min-Max Division"):
     start_idx = int((i/CALCULATION_DIVISIONS)*dataset_size)
     stop_idx = int(((i+1)/CALCULATION_DIVISIONS)*dataset_size)

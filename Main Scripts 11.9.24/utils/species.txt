@@ -81,7 +81,6 @@ AtSIO
 AtSIS
 AtSO
 AtSO2
-BULK
 C
 C2
 C2H
@@ -331,4 +330,3 @@ SO2
 SO2Plus
 SOPlus
 SPlus
-SURFACE

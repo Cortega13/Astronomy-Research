@@ -16,8 +16,12 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import TensorDataset, DataLoader, DistributedSampler
 import torch.nn.functional as F
+import sys
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
+DATASET_FRACTION = float(sys.argv[1])
+TIMESTEP_DIFFS = int(sys.argv[2])
+
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP = {
     "encoded_dimensions": 11,
@@ -45,8 +49,10 @@ def load_datasets(path):
 
     training_dataset = pd.read_hdf(training_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
     validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
+        
     training_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     validation_dataset.sort_values(by=['Model', 'Time'], inplace=True)
+    training_dataset = training_dataset[:int(DATASET_FRACTION*len(training_dataset))]
     
     return training_dataset, validation_dataset
 
@@ -81,7 +87,7 @@ def reconstruct_dataset_dataframe(encoded_dataset, dataset):
     return encoded_dataset
 
 
-def create_emulator_dataset(df, timesteps=1):
+def create_emulator_dataset(df, timesteps=TIMESTEP_DIFFS):
     print("-=+=- Creating Emulator Dataset (input, output) -=+=-")
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
     encoded_min, encoded_max = scalers["encoded_components"]
@@ -274,7 +280,7 @@ class Trainer:
     def _save_checkpoint(self):
         print(f"Saving model with new minimum loss: {self.minimum_loss}.")
         checkpoint = self.model.module.state_dict()
-        PATH = os.path.join(WORKING_PATH, "Weights/emulator.pth")
+        PATH = os.path.join(WORKING_PATH, f"Weights/{TIMESTEP_DIFFS}emulator{int(DATASET_FRACTION*100)}.pth")
         torch.save(checkpoint, PATH)
 
 
@@ -419,6 +425,3 @@ if __name__ == "__main__":
         print("Time Elapsed: ", datetime.now() - start_time)
     else:
         print("CUDA is not available.")
-        
-
-#  2x256

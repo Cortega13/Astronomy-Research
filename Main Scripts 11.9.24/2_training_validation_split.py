@@ -9,6 +9,7 @@ import numpy as np
 import os
 np.random.seed(13)
 
+FRACTION_OF_TOTAL_DATASET = 0.8
 TRAINING_SPLIT = 0.7
 LOWER_CLIPPING_THRESHOLD = np.float32(1E-20)
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/datasets/"
@@ -24,7 +25,8 @@ print("-=+=- Dataset Clipped -=+=-")
 
 ### Generate the training and validation model identifiers.
 model_numbers_list = df['Model'].unique()
-shuffled_model_numbers = np.random.permutation(model_numbers_list)
+print(f"Total Number of Models: {len(model_numbers_list)}")
+shuffled_model_numbers = np.random.permutation(model_numbers_list)[:int(FRACTION_OF_TOTAL_DATASET*len(model_numbers_list))]
 training_validation_split = int(len(shuffled_model_numbers) * TRAINING_SPLIT)
 
 training_model_ids = shuffled_model_numbers[:training_validation_split]
@@ -52,8 +54,8 @@ autoencoder_training_models.reset_index(drop=True, inplace=True)
 autoencoder_validation_models.reset_index(drop=True, inplace=True)
 
 ### Save the autoencoder data to h5 files. 
-autoencoder_training_models.to_hdf(os.path.join(WORKING_PATH, "training.h5"), key="autoencoder", mode="a")
-autoencoder_validation_models.to_hdf(os.path.join(WORKING_PATH, "validation.h5"), key="autoencoder", mode="a")
+# autoencoder_training_models.to_hdf(os.path.join(WORKING_PATH, "training.h5"), key="autoencoder", mode="a")
+# autoencoder_validation_models.to_hdf(os.path.join(WORKING_PATH, "validation.h5"), key="autoencoder", mode="a")
 
 
 ######### Emulator #########
@@ -89,8 +91,8 @@ emulator_training_models.reset_index(drop=True, inplace=True)
 emulator_validation_models.reset_index(drop=True, inplace=True)
 
 ### Save the emulator data to h5 files. 
-emulator_training_models.to_hdf(os.path.join(WORKING_PATH, "training.h5"), key="emulator", mode="a")
-emulator_validation_models.to_hdf(os.path.join(WORKING_PATH, "validation.h5"), key="emulator", mode="a")
+# emulator_training_models.to_hdf(os.path.join(WORKING_PATH, "training.h5"), key="emulator", mode="a")
+# emulator_validation_models.to_hdf(os.path.join(WORKING_PATH, "validation.h5"), key="emulator", mode="a")
 
 
 ### Print Lines

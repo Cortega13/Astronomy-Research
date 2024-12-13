@@ -1,4 +1,6 @@
+BULK
 Density
 Radfield
+SURFACE
 av
 gasTemp

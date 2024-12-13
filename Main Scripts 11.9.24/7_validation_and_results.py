@@ -17,6 +17,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import TensorDataset, DataLoader, DistributedSampler
 import torch.nn.functional as F
 import math
+import gc
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
@@ -98,6 +99,7 @@ def emulator_postprocessing(scalers, emulator_outputs):
 
 
 def create_emulator_dataset(scalers, df, timesteps):
+    df = df.copy()
     inputs, outputs = [], []
 
     df[PHYSICAL_PARAMETERS] = np.log10(df[PHYSICAL_PARAMETERS])
@@ -211,7 +213,7 @@ class Emulator(nn.Module):
         return x
 
 
-def load_objects():
+def load_objects(emulator_filename):
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
     autoencoder = VariationalAutoencoder(
         num_features=len(TOTAL_SPECIES),
@@ -224,16 +226,16 @@ def load_objects():
     emulator = Emulator(
         layer_sizes=HP["layer_sizes"],
     ).to(device)
-    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/10emulator.pth")))
+    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{emulator_filename}")))
     emulator.eval()
     
     return autoencoder, emulator, scalers
 
 
-def main(validation_dataset, batch_size=4192):
-    timesteps = 8
-    autoencoder, emulator, scalers = load_objects()
-    inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps*10)
+def main(timestep_multiplier, emulator_filename,validation_dataset, batch_size=4192):
+    timesteps = 1
+    autoencoder, emulator, scalers = load_objects(emulator_filename)
+    inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps*timestep_multiplier)
     
     with torch.no_grad():
         preencoded_inputs = autoencoder_preprocessing(scalers, inputs[TOTAL_SPECIES])
@@ -273,14 +275,18 @@ def main(validation_dataset, batch_size=4192):
 
     percent_error = ((abs(validation[TOTAL_SPECIES] - decoded_outputs[TOTAL_SPECIES])) / validation[TOTAL_SPECIES])
     validation[TOTAL_SPECIES] = np.clip(validation[TOTAL_SPECIES], 1e-20, 0.85, dtype=np.float32)
-    
+
     maceerror = abs((np.log10(validation[TOTAL_SPECIES]) - np.log10(decoded_outputs[TOTAL_SPECIES])) / np.log10(validation[TOTAL_SPECIES]))
     
-    print("Error", percent_error.mean().sort_values(ascending=True).iloc[-20:])
-    print("Mace Error: ", maceerror.sum(axis=1).mean())
+    #print("Error", percent_error.mean().sort_values(ascending=True).iloc[-20:])
+    #print("Mace Error: ", maceerror.sum(axis=1).mean())
+    print()
+    print(f"Emulator File: {emulator_filename}")
+    print(f"Timestep Multiplier: {timestep_multiplier}")
+    print(f"Dataset Fraction: {int(emulator_filename.split('emulator')[1].split('.pth')[0])/100}")
     print(f"Average Error: {percent_error.mean().mean():.4e}")
     print(f"STD Error: {percent_error.mean().std():.4e}")
-
+    gc.collect()
 
 if __name__ == "__main__":
     if torch.cuda.is_available():        
@@ -288,7 +294,10 @@ if __name__ == "__main__":
         WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 
         validation_dataset = load_datasets(WORKING_PATH)
-        main(validation_dataset)
+        for file in os.listdir(os.path.join(WORKING_PATH, "Weights")):
+            if file.endswith(".pth"):
+                timestep_multiplier = int(file.split("emulator")[0])
+                main(timestep_multiplier, file, validation_dataset)
         print("Time Elapsed: ", datetime.now() - start_time)
     else:
         print("CUDA is not available.")

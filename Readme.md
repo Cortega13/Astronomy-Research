@@ -13,12 +13,6 @@ Current std of loss for 1 timestep with FFN emulator: 2.8587e+04
 Current mean loss for 10 timesteps with FFN emulator: 1.4071e+06
 Current std of loss for 10 timesteps with FFN emulator: 1.9440e+07
 
-Current mean loss for 1 timestep with Mace ODEs: 3.7718e+03
-Current std of loss for 1 timestep with Mace ODEs: 6.7567e+04
-
-Current mean loss for 1 timestep with Mace ODEs: 1.8685e+03
-Current std of loss for 1 timestep with Mace ODEs: 3.3163e+04
-
 Error of 6 Worst performing species after emulating 1 timestep:
 
 NH             522.993042
@@ -27,3 +21,68 @@ SIH4          1822.667236
 OH            2060.281494
 H2OPlus      12319.539062
 H2          563971.562500
+
+
+With 100% of the total dataset
+1 Timestep
+Mean: 1.6611e+02
+STD: 2.8037e+03
+
+10 Timesteps
+Mean: 7.3099e+05
+STD: 9.2439e+06
+
+
+With 90% of the total dataset
+
+1 Timestep
+Mean: 2.2294e+02
+STD: 3.8278e+03
+
+10 Timesteps
+Mean: 8.7011e+05
+STD: 1.0980e+07
+
+
+With 80% of the total dataset
+
+1 Timestep
+Mean: 1.8111e+02
+STD: 3.0644e+03
+
+10 Timesteps
+Mean: 1.6373e+06
+STD: 2.1271e+07
+
+
+With 70% of the total dataset
+
+1 Timestep
+Mean: 2.0768e+02
+STD: 3.5570e+03
+
+10 Timesteps
+Mean: 9.0304e+05
+STD: 1.1814e+07
+
+
+With 60% of the total dataset
+
+1 Timestep
+Mean: 2.7134e+02
+STD: 4.7127e+03
+
+10 Timesteps
+Mean: 3.0176e+06
+STD: 3.8885e+07
+
+
+With 40% of the total dataset
+
+1 Timestep
+Mean: 2.1285e+02
+STD: 3.5937e+03
+
+10 Timesteps
+Mean: 1.6386e+06
+STD: 2.2049e+07
