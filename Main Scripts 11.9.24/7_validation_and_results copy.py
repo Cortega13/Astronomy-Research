@@ -22,60 +22,64 @@ import gc
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
-HP = {
-    "encoded_dimensions": 6,
-    "layer_sizes": [17, 256, 256, 11],
-    "hidden_layer": 400
+vaes_HP = {
+    "gas_encoded_dims": 6,
+    "gas_hidden_dims": 400,
+    "bulk_encoded_dims": 4,
+    "bulk_hidden_dims": 200,
+    "surface_encoded_dims": 4,
+    "surface_hidden_dims": 600,
+}
+emulator_HP = {
+    "layer_sizes": [20, 256, 256, 14],
 }
 
 METADATA = ["Time", "Model"] 
 PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
-TOTAL_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/species.txt"), dtype=str, delimiter=" ").tolist()
+
 GAS_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/gas_species.txt"), dtype=str, delimiter=" ").tolist()
 BULK_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/bulk_species.txt"), dtype=str, delimiter=" ").tolist()
 SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/surface_species.txt"), dtype=str, delimiter=" ").tolist()
-COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
+TOTAL_SPECIES = GAS_SPECIES + BULK_SPECIES + SURFACE_SPECIES
 
-TOTAL_SPECIES = GAS_SPECIES
-CURRENT_NAME = "gas_species"
+
+TOTAL_COMPONENTS = [f"Component_{i}" for i in range(1, vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]+vaes_HP["surface_encoded_dims"]+1)]
+GAS_COMPONENTS = TOTAL_COMPONENTS[:vaes_HP["gas_encoded_dims"]]
+BULK_COMPONENTS = TOTAL_COMPONENTS[vaes_HP["gas_encoded_dims"]:vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]]
+SURFACE_COMPONENTS = TOTAL_COMPONENTS[vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]:]
 
 ### Data Processing Functions
 def load_datasets(path):
     validation_dataset_path = os.path.join(path, "Datasets/validation.h5")
-    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0).astype(np.float32).reset_index(drop=True)
+    validation_dataset = pd.read_hdf(validation_dataset_path, "emulator", start=0, stop=50).astype(np.float32).reset_index(drop=True)
     validation_dataset = validation_dataset[METADATA + PHYSICAL_PARAMETERS + TOTAL_SPECIES]
     
     return validation_dataset
 
 
-def autoencoder_preprocessing(scalers, abundances_features):
-    ### Preprocesses the data for the autoencoder training. Returns a dataloader.
+def autoencoder_preprocessing(scalers, abundances_features, phase_type):
     print("Starting Encoder Preprocessing.")
 
-    # Created using only the training data.
-    abundances_min, abundances_max = scalers[CURRENT_NAME]
+    abundances_min, abundances_max = scalers[phase_type]
 
-    # Log10 Scale Abundances and then MinMax scale.
     abundances_features = np.log10(abundances_features, dtype=np.float32)
 
-    # Minmax scale all the abundances_features.
     abundances_features = (abundances_features - abundances_min) / (abundances_max - abundances_min)
 
-    #Convert the abundances_features dataframe to tensor format for inferencing.
     abundances_features_tensor = torch.tensor(abundances_features.to_numpy(), dtype=torch.float32)
-
+    
     return abundances_features_tensor
 
 
-def autoencoder_postprocessing(scalers, features):
+def autoencoder_postprocessing(scalers, features, phase_type, species_columns):
     ### Postprocesses the data for the autoencoder training. Returns a dataloader.
     print("Starting Decoder Postprocessing.")
 
     # Created using only the training data.
-    abundances_min, abundances_max = scalers[CURRENT_NAME]
+    abundances_min, abundances_max = scalers[phase_type]
 
     features = features.cpu().detach().numpy()
-    features = pd.DataFrame(features, columns=TOTAL_SPECIES)
+    features = pd.DataFrame(features, columns=species_columns)
     features = features * (abundances_max - abundances_min) + abundances_min
     features = np.power(10, features, dtype=np.float32)
 
@@ -83,24 +87,36 @@ def autoencoder_postprocessing(scalers, features):
 
 
 def emulator_preprocessing(scalers, encoded_dataset, dataset):
-    encoded_min, encoded_max = scalers["encoded_components"]
+    gas_encoded_min, gas_encoded_max = scalers["gas_species"]
+    bulk_encoded_min, bulk_encoded_max = scalers["bulk_species"]
+    surface_encoded_min, surface_encoded_max = scalers["surface_species"]
+    
     encoded_dataset = encoded_dataset.cpu().detach().numpy()
-    encoded_dataset = pd.DataFrame(encoded_dataset, columns=COMPONENTS)
+    encoded_dataset = pd.DataFrame(encoded_dataset, columns=TOTAL_COMPONENTS)
     
     encoded_dataset = pd.concat([dataset[PHYSICAL_PARAMETERS], encoded_dataset], axis=1)
     
-    encoded_dataset[COMPONENTS] = (encoded_dataset[COMPONENTS] - encoded_min) / (encoded_max - encoded_min)
-    encoded_dataset = encoded_dataset[PHYSICAL_PARAMETERS + COMPONENTS]  
+    encoded_dataset[GAS_COMPONENTS] = (encoded_dataset[GAS_COMPONENTS] - gas_encoded_min) / (gas_encoded_max - gas_encoded_min)
+    encoded_dataset[BULK_COMPONENTS] = (encoded_dataset[BULK_COMPONENTS] - bulk_encoded_min) / (bulk_encoded_max - bulk_encoded_min)
+    encoded_dataset[SURFACE_COMPONENTS] = (encoded_dataset[SURFACE_COMPONENTS] - surface_encoded_min) / (surface_encoded_max - surface_encoded_min)
+    
+    encoded_dataset = encoded_dataset[PHYSICAL_PARAMETERS + TOTAL_COMPONENTS]  
     
     return torch.tensor(encoded_dataset.to_numpy(), dtype=torch.float32)
 
 
 def emulator_postprocessing(scalers, emulator_outputs):
-    encoded_min, encoded_max = scalers["encoded_components"]
+    gas_encoded_min, gas_encoded_max = scalers["gas_species"]
+    bulk_encoded_min, bulk_encoded_max = scalers["bulk_species"]
+    surface_encoded_min, surface_encoded_max = scalers["surface_species"]
     
     emulator_outputs = emulator_outputs.cpu().detach().numpy()
-    emulator_outputs = pd.DataFrame(emulator_outputs, columns=COMPONENTS)
-    emulator_outputs = emulator_outputs * (encoded_max - encoded_min) + encoded_min
+    emulator_outputs = pd.DataFrame(emulator_outputs, columns=TOTAL_COMPONENTS)
+    
+    emulator_outputs[GAS_COMPONENTS] = emulator_outputs[GAS_COMPONENTS] * (gas_encoded_max - gas_encoded_min) + gas_encoded_min
+    emulator_outputs[BULK_COMPONENTS] = emulator_outputs[BULK_COMPONENTS] * (bulk_encoded_max - bulk_encoded_min) + bulk_encoded_min
+    emulator_outputs[SURFACE_COMPONENTS] = emulator_outputs[SURFACE_COMPONENTS] * (surface_encoded_max - surface_encoded_min) + surface_encoded_min    
+    
     return torch.tensor(emulator_outputs.to_numpy(), dtype=torch.float32)  
 
 
@@ -219,45 +235,83 @@ class Emulator(nn.Module):
         return x
 
 
-def load_objects(emulator_filename):
+def load_objects():
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    autoencoder = VariationalAutoencoder(
-        num_features=len(TOTAL_SPECIES),
-        encoded_dimensions=HP["encoded_dimensions"],
-        hidden_layer=HP["hidden_layer"]
+    gas_autoencoder = VariationalAutoencoder(
+        num_features=len(GAS_SPECIES),
+        encoded_dimensions=vaes_HP["gas_encoded_dims"],
+        hidden_layer=vaes_HP["gas_hidden_dims"],
     ).to(device)
-    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{CURRENT_NAME}_vae.pth")))
-    autoencoder.eval()
+    gas_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/gas_species_vae.pth")))
+    gas_autoencoder.eval()
+    
+    bulk_autoencoder = VariationalAutoencoder(
+        num_features=len(BULK_SPECIES),
+        encoded_dimensions=vaes_HP["bulk_encoded_dims"],
+        hidden_layer=vaes_HP["bulk_hidden_dims"],
+    ).to(device)
+    bulk_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/bulk_species_vae.pth")))
+    bulk_autoencoder.eval()
+    
+    surface_autoencoder = VariationalAutoencoder(
+        num_features=len(SURFACE_SPECIES),
+        encoded_dimensions=vaes_HP["surface_encoded_dims"],
+        hidden_layer=vaes_HP["surface_hidden_dims"],
+    ).to(device)
+    surface_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/surface_species_vae.pth")))
+    surface_autoencoder.eval()
     
     emulator = Emulator(
-        layer_sizes=HP["layer_sizes"],
+        layer_sizes=emulator_HP["layer_sizes"],
     ).to(device)
-    if emulator_filename:
-        emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{emulator_filename}")))
+    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/emulator.pth")))
     emulator.eval()
     
-    return autoencoder, emulator, scalers
+    return scalers, gas_autoencoder, bulk_autoencoder, surface_autoencoder, emulator
 
 
-def main(timestep_multiplier, emulator_filename, validation_dataset, batch_size=4192):
+def main(timestep_multiplier, validation_dataset, batch_size=4192):
     timesteps = 0
-    autoencoder, emulator, scalers = load_objects(emulator_filename)
-    inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps*timestep_multiplier)
+    scalers, gas_autoencoder, bulk_autoencoder, surface_autoencoder, emulator = load_objects()
+    inputs, outputs = create_emulator_dataset(scalers, validation_dataset, timesteps*timestep_multiplier)
     
     with torch.no_grad():
-        preencoded_inputs = autoencoder_preprocessing(scalers, inputs[TOTAL_SPECIES])
-        encoded_inputs = []
-        for batch_start in range(0, len(preencoded_inputs), batch_size):
-            batch_end = min(batch_start + batch_size, len(preencoded_inputs))
-            batch = preencoded_inputs[batch_start:batch_end]
-            batch = batch.to(device)
-            batch_encoded, _ = autoencoder.encode(batch)
-            #batch_encoded = batch+encoded + torch.randn_like(batch_encoded) * 0.1
-            encoded_inputs.append(batch_encoded)
-        encoded_inputs = torch.cat(encoded_inputs, dim=0)
+        preencoded_gas_inputs = autoencoder_preprocessing(scalers, inputs[GAS_SPECIES], "gas_species")
+        preencoded_bulk_inputs = autoencoder_preprocessing(scalers, inputs[BULK_SPECIES], "bulk_species")
+        preencoded_surface_inputs = autoencoder_preprocessing(scalers, inputs[SURFACE_SPECIES], "surface_species")
         
+        ### Encoding Step
+        gas_encoded_inputs, bulk_encoded_inputs, surface_encoded_inputs = [], [], []
+        for batch_start in range(0, len(preencoded_gas_inputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(preencoded_gas_inputs))
+            batch = preencoded_gas_inputs[batch_start:batch_end]
+            batch = batch.to(device)
+            batch_encoded, _ = gas_autoencoder.encode(batch)
+            gas_encoded_inputs.append(batch_encoded)
+        
+        for batch_start in range(0, len(preencoded_bulk_inputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(preencoded_bulk_inputs))
+            batch = preencoded_bulk_inputs[batch_start:batch_end]
+            batch = batch.to(device)
+            batch_encoded, _ = bulk_autoencoder.encode(batch)
+            bulk_encoded_inputs.append(batch_encoded)
+        
+        for batch_start in range(0, len(preencoded_surface_inputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(preencoded_surface_inputs))
+            batch = preencoded_surface_inputs[batch_start:batch_end]
+            batch = batch.to(device)
+            batch_encoded, _ = surface_autoencoder.encode(batch)
+            surface_encoded_inputs.append(batch_encoded)
+        
+        gas_encoded_inputs = torch.cat(gas_encoded_inputs, dim=0)
+        bulk_encoded_inputs = torch.cat(bulk_encoded_inputs, dim=0)
+        surface_encoded_inputs = torch.cat(surface_encoded_inputs, dim=0)
+        
+        total_encoded_inputs = torch.cat([gas_encoded_inputs, bulk_encoded_inputs, surface_encoded_inputs], dim=1)
+        
+        ### Emulator Step
         for _ in range(timesteps):
-            encoded_inputs = emulator_preprocessing(scalers, encoded_inputs, inputs)
+            encoded_inputs = emulator_preprocessing(scalers, total_encoded_inputs, inputs)
             
             emulator_outputs = []
             for batch_start in range(0, len(encoded_inputs), batch_size):
@@ -269,19 +323,46 @@ def main(timestep_multiplier, emulator_filename, validation_dataset, batch_size=
             emulator_outputs = torch.cat(emulator_outputs, dim=0)
             encoded_inputs = emulator_postprocessing(scalers, emulator_outputs)
 
-        decoded_outputs = []
-        for batch_start in range(0, len(encoded_inputs), batch_size):
-            batch_end = min(batch_start + batch_size, len(encoded_inputs))
-            batch = encoded_inputs[batch_start:batch_end]
+        ### Decoding Step
+        gas_outputs = encoded_inputs[:, :vaes_HP["gas_encoded_dims"]]
+        bulk_outputs = encoded_inputs[:, vaes_HP["gas_encoded_dims"]:vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]]
+        surface_outputs = encoded_inputs[:, vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]:]
+        
+        gas_decoded_outputs, bulk_decoded_outputs, surface_decoded_outputs = [], [], []
+        for batch_start in range(0, len(gas_outputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(gas_outputs))
+            batch = gas_outputs[batch_start:batch_end]
             batch = batch.to(device)
-            batch_decoded = autoencoder.decode(batch)
-            decoded_outputs.append(batch_decoded)
-        decoded_outputs = torch.cat(decoded_outputs, dim=0)
+            batch_decoded = gas_autoencoder.decode(batch)
+            gas_decoded_outputs.append(batch_decoded)
+        
+        for batch_start in range(0, len(bulk_outputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(bulk_outputs))
+            batch = bulk_outputs[batch_start:batch_end]
+            batch = batch.to(device)
+            batch_decoded = bulk_autoencoder.decode(batch)
+            bulk_decoded_outputs.append(batch_decoded)
+        
+        for batch_start in range(0, len(surface_outputs), batch_size):
+            batch_end = min(batch_start + batch_size, len(surface_outputs))
+            batch = surface_outputs[batch_start:batch_end]
+            batch = batch.to(device)
+            batch_decoded = surface_autoencoder.decode(batch)
+            surface_decoded_outputs.append(batch_decoded)            
+        
+        gas_decoded_outputs = torch.cat(gas_decoded_outputs, dim=0)
+        bulk_decoded_outputs = torch.cat(bulk_decoded_outputs, dim=0)
+        surface_decoded_outputs = torch.cat(surface_decoded_outputs, dim=0)
+        
+        gas_decoded_outputs = autoencoder_postprocessing(scalers, gas_decoded_outputs, "gas_species", GAS_SPECIES)
+        bulk_decoded_outputs = autoencoder_postprocessing(scalers, bulk_decoded_outputs, "bulk_species", BULK_SPECIES)
+        surface_decoded_outputs = autoencoder_postprocessing(scalers, surface_decoded_outputs, "surface_species", SURFACE_SPECIES)
+        
+        final_outputs = pd.concat([gas_decoded_outputs, bulk_decoded_outputs, surface_decoded_outputs], axis=1)
 
-        decoded_outputs = autoencoder_postprocessing(scalers, decoded_outputs)
 
-    percent_error = ((abs(validation[TOTAL_SPECIES] - decoded_outputs[TOTAL_SPECIES])) / validation[TOTAL_SPECIES])
-    
+    ### Error Analysis
+    percent_error = ((abs(outputs[TOTAL_SPECIES] - final_outputs[TOTAL_SPECIES])) / outputs[TOTAL_SPECIES])
     print()
     print(percent_error.mean().sort_values(ascending=False))
     print(f"Average Error: {percent_error.mean().mean():.4e}")
@@ -294,11 +375,7 @@ if __name__ == "__main__":
         WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 
         validation_dataset = load_datasets(WORKING_PATH)
-        main(1, "", validation_dataset)
-        # for file in os.listdir(os.path.join(WORKING_PATH, "Weights")):
-        #     if file.endswith(".pth"):
-        #         timestep_multiplier = int(file.split("emulator")[0])
-        #         main(timestep_multiplier, file, validation_dataset)
+        main(1, validation_dataset)
         print("Time Elapsed: ", datetime.now() - start_time)
     else:
         print("CUDA is not available.")

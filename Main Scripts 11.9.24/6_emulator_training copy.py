@@ -16,13 +16,19 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import TensorDataset, DataLoader, DistributedSampler
 import torch.nn.functional as F
-import sys
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-### Configurations
 
+### Configurations
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
-HP = {
-    "encoded_dimensions": 11,
+vaes_HP = {
+    "gas_encoded_dims": 6,
+    "gas_hidden_dims": 400,
+    "bulk_encoded_dims": 4,
+    "bulk_hidden_dims": 200,
+    "surface_encoded_dims": 4,
+    "surface_hidden_dims": 600,
+}
+emulator_HP = {
     "learning_rate": 0.001,
     "weight_decay": 0,
     "batch_size": 512,
@@ -30,18 +36,23 @@ HP = {
     "early_stopping_tolerance": 12,
     "max_epochs": 999999,
     "gaussian_noise_std": 0.005,
-    "layer_sizes": [17, 256, 256, 11],
-    "hidden_layer": 200,
+    "layer_sizes": [20, 256, 256, 14],
     "max_clipping": 4,
 }
-TIMESTEP_DIFFS = 1
 
-METADATA = ["Time", "Model"] 
+TIMESTEP_DIFFS = 1
+METADATA = ["Time", "Model"]
+
 PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
+
 GAS_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/gas_species.txt"), dtype=str, delimiter=" ").tolist()
 BULK_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/bulk_species.txt"), dtype=str, delimiter=" ").tolist()
 SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/surface_species.txt"), dtype=str, delimiter=" ").tolist()
-COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
+
+TOTAL_COMPONENTS = [f"Component_{i}" for i in range(1, vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]+vaes_HP["surface_encoded_dims"]+1)]
+GAS_COMPONENTS = TOTAL_COMPONENTS[:vaes_HP["gas_encoded_dims"]]
+BULK_COMPONENTS = TOTAL_COMPONENTS[vaes_HP["gas_encoded_dims"]:vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]]
+SURFACE_COMPONENTS = TOTAL_COMPONENTS[vaes_HP["gas_encoded_dims"]+vaes_HP["bulk_encoded_dims"]:]
 
 ### Data Processing Functions
 def load_datasets(path):
@@ -73,13 +84,15 @@ def autoencoder_preprocessing(abundances_features, phase_type):
 
     #Convert the abundances_features dataframe to tensor format for inferencing.
     abundances_features_tensor = torch.tensor(abundances_features.to_numpy(), dtype=torch.float32)
+    
+    abundances_features_dataloader = DataLoader(TensorDataset(abundances_features_tensor), batch_size=emulator_HP["batch_size"], shuffle=False)
 
-    return abundances_features_tensor
+    return abundances_features_dataloader
 
 
-def reconstruct_dataset_dataframe(encoded_dataset, dataset):    
+def reconstruct_dataset_dataframe(encoded_dataset, dataset):
     encoded_dataset = encoded_dataset.cpu().detach().numpy()
-    encoded_dataset = pd.DataFrame(encoded_dataset, columns=COMPONENTS)
+    encoded_dataset = pd.DataFrame(encoded_dataset, columns=TOTAL_COMPONENTS)
     
     encoded_dataset = pd.concat([dataset[PHYSICAL_PARAMETERS], encoded_dataset], axis=1)
     encoded_dataset = pd.concat([dataset[METADATA], encoded_dataset], axis=1)
@@ -90,15 +103,17 @@ def reconstruct_dataset_dataframe(encoded_dataset, dataset):
 def create_emulator_dataset(df, timesteps=TIMESTEP_DIFFS):
     print("-=+=- Creating Emulator Dataset (input, output) -=+=-")
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    gas_encoded_min, gas_encoded_max = scalers["gas_species"]
-    bulk_encoded_min, bulk_encoded_max = scalers["bulk_species"]
-    surface_encoded_min, surface_encoded_max = scalers["surface_species"]
+    gas_components_min, gas_components_max = scalers["gas_components"]
+    bulk_components_min, bulk_components_max = scalers["bulk_components"]
+    surface_components_min, surface_components_max = scalers["surface_components"]
 
     df[PHYSICAL_PARAMETERS] = np.log10(df[PHYSICAL_PARAMETERS])
     for parameter in PHYSICAL_PARAMETERS:
         df[parameter] = scalers[parameter].transform(df[parameter].values.reshape(-1, 1))
 
-    df[COMPONENTS] = (df[COMPONENTS] - encoded_min) / (encoded_max - encoded_min)
+    df[GAS_COMPONENTS] = (df[GAS_COMPONENTS] - gas_components_min) / (gas_components_max - gas_components_min)
+    df[BULK_COMPONENTS] = (df[BULK_COMPONENTS] - bulk_components_min) / (bulk_components_max - bulk_components_min)
+    df[SURFACE_COMPONENTS] = (df[SURFACE_COMPONENTS] - surface_components_min) / (surface_components_max - surface_components_min)
     
     inputs, outputs = [], []
     
@@ -107,15 +122,15 @@ def create_emulator_dataset(df, timesteps=TIMESTEP_DIFFS):
         if not (differences == 1000).all():
             print("Time differences not equal to 1000.")
             continue
-        sub_array = sub_df[PHYSICAL_PARAMETERS + COMPONENTS].to_numpy()
+        sub_array = sub_df[PHYSICAL_PARAMETERS + TOTAL_COMPONENTS].to_numpy()
         
         num_rows = len(sub_array)
         if num_rows > timesteps:
             input_window = sub_array[:-timesteps]
-            output_window = sub_array[timesteps:, -len(COMPONENTS):]
+            output_window = sub_array[timesteps:, -len(TOTAL_COMPONENTS):]
             if timesteps == 0:
                 input_window = sub_array
-                output_window = sub_array[:, -len(COMPONENTS):]
+                output_window = sub_array[:, -len(TOTAL_COMPONENTS):]
             
             inputs.append(input_window)
             outputs.append(output_window)
@@ -127,7 +142,7 @@ def create_emulator_dataset(df, timesteps=TIMESTEP_DIFFS):
 
 ### Defining the Variational Autoencoder.
 class VariationalAutoencoder(nn.Module):
-    def __init__(self, num_features, encoded_dimensions=11, hidden_layer=HP["hidden_layer"]):
+    def __init__(self, num_features, encoded_dimensions=0, hidden_layer=0):
         super(VariationalAutoencoder, self).__init__()        
         self.layer1 = nn.Linear(num_features, hidden_layer)
         self.fc_mu = nn.Linear(hidden_layer, encoded_dimensions)
@@ -168,26 +183,61 @@ class VariationalAutoencoder(nn.Module):
 
 def encode_dataset(dataset):
     print("-=+=- Encoding Dataset -=+=-")
-    autoencoder = VariationalAutoencoder(
-        num_features=len(TOTAL_SPECIES),
-        encoded_dimensions=HP["encoded_dimensions"],
+    gas_autoencoder = VariationalAutoencoder(
+        num_features=len(GAS_SPECIES),
+        encoded_dimensions=vaes_HP["gas_encoded_dims"],
+        hidden_layer=vaes_HP["gas_hidden_dims"],
     ).to(device)
-    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/vae.pth")))
-    autoencoder.eval()
-
-    dataset_tensor = autoencoder_preprocessing(dataset[TOTAL_SPECIES])
-    dataset_loader = DataLoader(TensorDataset(dataset_tensor), batch_size=HP["batch_size"], shuffle=False)
+    gas_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/gas_species_vae.pth")))
+    gas_autoencoder.eval()
     
-    encoded_batches = []
+    bulk_autoencoder = VariationalAutoencoder(
+        num_features=len(BULK_SPECIES),
+        encoded_dimensions=vaes_HP["bulk_encoded_dims"],
+        hidden_layer=vaes_HP["bulk_hidden_dims"],
+    ).to(device)
+    bulk_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/bulk_species_vae.pth")))
+    bulk_autoencoder.eval()
+    
+    surface_autoencoder = VariationalAutoencoder(
+        num_features=len(SURFACE_SPECIES),
+        encoded_dimensions=vaes_HP["surface_encoded_dims"],
+        hidden_layer=vaes_HP["surface_hidden_dims"],
+    ).to(device)
+    surface_autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/surface_species_vae.pth")))
+    surface_autoencoder.eval()
+
+    gas_species_dataloader = autoencoder_preprocessing(dataset[GAS_SPECIES], "gas_species")
+    bulk_species_dataloader = autoencoder_preprocessing(dataset[BULK_SPECIES], "bulk_species")
+    surface_species_dataloader = autoencoder_preprocessing(dataset[SURFACE_SPECIES], "surface_species")
+
+    gas_components = []
+    bulk_components = []
+    surface_components = []
     
     with torch.no_grad():
-        for batch in dataset_loader:
+        for batch in gas_species_dataloader:
             batch_tensor = batch[0].to(device)
-            encoded_batch, _ = autoencoder.encode(batch_tensor)
-            encoded_batches.append(encoded_batch.cpu())
+            encoded_batch, _ = gas_autoencoder.encode(batch_tensor)
+            gas_components.append(encoded_batch.cpu())
+        
+        for batch in bulk_species_dataloader:
+            batch_tensor = batch[0].to(device)
+            encoded_batch, _ = bulk_autoencoder.encode(batch_tensor)
+            bulk_components.append(encoded_batch.cpu())
+        
+        for batch in surface_species_dataloader:
+            batch_tensor = batch[0].to(device)
+            encoded_batch, _ = surface_autoencoder.encode(batch_tensor)
+            surface_components.append(encoded_batch.cpu())
 
-    encoded_dataset = torch.cat(encoded_batches, dim=0)
-    encoded_dataset = reconstruct_dataset_dataframe(encoded_dataset, dataset)
+    gas_components = torch.cat(gas_components, dim=0)
+    bulk_components = torch.cat(bulk_components, dim=0)
+    surface_components = torch.cat(surface_components, dim=0)
+    
+    encoded_combined_dataset = torch.cat([gas_components, bulk_components, surface_components], dim=1)
+        
+    encoded_dataset = reconstruct_dataset_dataframe(encoded_combined_dataset, dataset)
     
     inputs, outputs = create_emulator_dataset(encoded_dataset)
     
@@ -201,11 +251,11 @@ def tensor_to_dataloader(tensor_dataset, rank, world_size):
         num_replicas=world_size, 
         rank=rank, 
         drop_last=False,
-        shuffle=HP["shuffle"]
+        shuffle=emulator_HP["shuffle"]
     )
     dataloader = DataLoader(
         tensor_dataset,
-        batch_size=HP["batch_size"],
+        batch_size=emulator_HP["batch_size"],
         pin_memory=True,
         shuffle=False,
         sampler=sampler_train,
@@ -262,8 +312,7 @@ class Trainer:
         ampscaler: GradScaler,
         criterion: nn.Module,
         gpu_id: int,
-        encoded_min: float,
-        encoded_max: float
+        scalers: dict,
     ) -> None:
         self.gpu_id = gpu_id
         self.model = model.to(gpu_id)
@@ -275,19 +324,17 @@ class Trainer:
         self.minimum_loss = np.inf
         self.total_loss = 0
         self.epochs_without_improvement = 0
-        self.encoded_min = encoded_min
-        self.encoded_max = encoded_max
-        
+        self.scalers = scalers        
 
     def _save_checkpoint(self):
         print(f"Saving model with new minimum loss: {self.minimum_loss}.")
         checkpoint = self.model.module.state_dict()
-        PATH = os.path.join(WORKING_PATH, f"Weights/{TIMESTEP_DIFFS}emulator{int(DATASET_FRACTION*100)}.pth")
+        PATH = os.path.join(WORKING_PATH, f"Weights/emulator.pth")
         torch.save(checkpoint, PATH)
 
 
     def _check_early_stopping(self):
-        if self.epochs_without_improvement >= HP["early_stopping_tolerance"]:
+        if self.epochs_without_improvement >= emulator_HP["early_stopping_tolerance"]:
             print("Early Stopping.")
             return True
         return False
@@ -314,7 +361,7 @@ class Trainer:
         
         self.ampscaler.scale(loss).backward()
         self.ampscaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), HP["max_clipping"])
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), emulator_HP["max_clipping"])
         self.ampscaler.step(self.optimizer)
         self.ampscaler.update()
 
@@ -322,9 +369,7 @@ class Trainer:
     def _run_validation_batch(self, features, targets):
         with torch.no_grad():
             outputs = self.model(features)
-            unscaled_outputs = outputs * (self.encoded_max - self.encoded_min) + self.encoded_min
-            unscaled_targets = targets * (self.encoded_max - self.encoded_min) + self.encoded_min
-            loss = self.criterion(unscaled_outputs, unscaled_targets)
+            loss = self.criterion(outputs, targets)
             self.total_loss += loss.item()
 
 
@@ -345,7 +390,7 @@ class Trainer:
 
 
     def train(self):
-        for epoch in range(HP["max_epochs"]):
+        for epoch in range(emulator_HP["max_epochs"]):
             self._run_epoch(epoch)
             self._check_minimum_loss()
             if self._check_early_stopping():
@@ -366,8 +411,8 @@ def ddp_setup(rank, world_size):
 
 def load_training_objects(rank):
     model = Emulator(
-        layer_sizes=HP["layer_sizes"],
-        noise_std = HP["gaussian_noise_std"],
+        layer_sizes=emulator_HP["layer_sizes"],
+        noise_std = emulator_HP["gaussian_noise_std"],
         ).to(rank)
     
     model = DDP(
@@ -378,8 +423,8 @@ def load_training_objects(rank):
 
     optimizer = optim.AdamW(
         model.parameters(), 
-        lr=HP["learning_rate"], 
-        weight_decay=HP["weight_decay"]
+        lr=emulator_HP["learning_rate"], 
+        weight_decay=emulator_HP["weight_decay"]
         )
     
     ampscaler = GradScaler()
@@ -395,7 +440,6 @@ def main(rank, world_size, training_tensor, validation_tensor):
     training_dataloader = tensor_to_dataloader(training_tensor, rank, world_size)
     validation_dataloader = tensor_to_dataloader(validation_tensor, rank, world_size)
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    encoded_min, encoded_max = scalers["encoded_components"]
     trainer = Trainer(
         model,
         training_dataloader,
@@ -404,15 +448,14 @@ def main(rank, world_size, training_tensor, validation_tensor):
         ampscaler,
         criterion,
         rank,
-        encoded_min,
-        encoded_max
+        scalers,
         )
     trainer.train()
     destroy_process_group()
 
 
 if __name__ == "__main__":
-    if torch.cuda.is_available():        
+    if torch.cuda.is_available():
         start_time = datetime.now()
         WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 

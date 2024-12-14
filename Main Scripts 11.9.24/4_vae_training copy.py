@@ -129,7 +129,7 @@ def autoencoder_postprocessing(encoded_features):
 
 ### Defining the Variational Autoencoder.
 class VariationalAutoencoder(nn.Module):
-    def __init__(self, num_features, encoded_dimensions=1, hidden_layer=1, dropout_rate=0):
+    def __init__(self, num_features, encoded_dimensions=0, hidden_layer=0, dropout_rate=0):
         super(VariationalAutoencoder, self).__init__()
                 
         # Encoder
