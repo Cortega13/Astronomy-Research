@@ -23,15 +23,21 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP = {
-    "encoded_dimensions": 11,
-    "layer_sizes": [15, 256, 256, 11],
+    "encoded_dimensions": 4,
+    "layer_sizes": [17, 256, 256, 11],
     "hidden_layer": 200
 }
 
 METADATA = ["Time", "Model"] 
 PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
 TOTAL_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/species.txt"), dtype=str, delimiter=" ").tolist()
+GAS_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/gas_species.txt"), dtype=str, delimiter=" ").tolist()
+BULK_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/bulk_species.txt"), dtype=str, delimiter=" ").tolist()
+SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/surface_species.txt"), dtype=str, delimiter=" ").tolist()
 COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
+
+TOTAL_SPECIES = GAS_SPECIES
+CURRENT_NAME="gas_species"
 
 ### Data Processing Functions
 def load_datasets(path):
@@ -47,7 +53,7 @@ def autoencoder_preprocessing(scalers, abundances_features):
     print("Starting Encoder Preprocessing.")
 
     # Created using only the training data.
-    abundances_min, abundances_max = scalers["total_species"]
+    abundances_min, abundances_max = scalers[CURRENT_NAME]
 
     # Log10 Scale Abundances and then MinMax scale.
     abundances_features = np.log10(abundances_features, dtype=np.float32)
@@ -66,7 +72,7 @@ def autoencoder_postprocessing(scalers, features):
     print("Starting Decoder Postprocessing.")
 
     # Created using only the training data.
-    abundances_min, abundances_max = scalers["total_species"]
+    abundances_min, abundances_max = scalers[CURRENT_NAME]
 
     features = features.cpu().detach().numpy()
     features = pd.DataFrame(features, columns=TOTAL_SPECIES)
@@ -220,20 +226,21 @@ def load_objects(emulator_filename):
         encoded_dimensions=HP["encoded_dimensions"],
         hidden_layer=HP["hidden_layer"]
     ).to(device)
-    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/vae.pth")))
+    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/gas_species_vae.pth")))
     autoencoder.eval()
     
     emulator = Emulator(
         layer_sizes=HP["layer_sizes"],
     ).to(device)
-    emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{emulator_filename}")))
+    if emulator_filename:
+        emulator.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{emulator_filename}")))
     emulator.eval()
     
     return autoencoder, emulator, scalers
 
 
-def main(timestep_multiplier, emulator_filename,validation_dataset, batch_size=4192):
-    timesteps = 1
+def main(timestep_multiplier, emulator_filename, validation_dataset, batch_size=4192):
+    timesteps = 0
     autoencoder, emulator, scalers = load_objects(emulator_filename)
     inputs, validation = create_emulator_dataset(scalers, validation_dataset, timesteps*timestep_multiplier)
     
@@ -274,30 +281,24 @@ def main(timestep_multiplier, emulator_filename,validation_dataset, batch_size=4
         decoded_outputs = autoencoder_postprocessing(scalers, decoded_outputs)
 
     percent_error = ((abs(validation[TOTAL_SPECIES] - decoded_outputs[TOTAL_SPECIES])) / validation[TOTAL_SPECIES])
-    validation[TOTAL_SPECIES] = np.clip(validation[TOTAL_SPECIES], 1e-20, 0.85, dtype=np.float32)
-
-    maceerror = abs((np.log10(validation[TOTAL_SPECIES]) - np.log10(decoded_outputs[TOTAL_SPECIES])) / np.log10(validation[TOTAL_SPECIES]))
     
-    #print("Error", percent_error.mean().sort_values(ascending=True).iloc[-20:])
-    #print("Mace Error: ", maceerror.sum(axis=1).mean())
     print()
-    print(f"Emulator File: {emulator_filename}")
-    print(f"Timestep Multiplier: {timestep_multiplier}")
-    print(f"Dataset Fraction: {int(emulator_filename.split('emulator')[1].split('.pth')[0])/100}")
+    print(percent_error.mean().sort_values(ascending=False))
     print(f"Average Error: {percent_error.mean().mean():.4e}")
     print(f"STD Error: {percent_error.mean().std():.4e}")
     gc.collect()
 
 if __name__ == "__main__":
-    if torch.cuda.is_available():        
+    if torch.cuda.is_available():
         start_time = datetime.now()
         WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 
         validation_dataset = load_datasets(WORKING_PATH)
-        for file in os.listdir(os.path.join(WORKING_PATH, "Weights")):
-            if file.endswith(".pth"):
-                timestep_multiplier = int(file.split("emulator")[0])
-                main(timestep_multiplier, file, validation_dataset)
+        main(1, "", validation_dataset)
+        # for file in os.listdir(os.path.join(WORKING_PATH, "Weights")):
+        #     if file.endswith(".pth"):
+        #         timestep_multiplier = int(file.split("emulator")[0])
+        #         main(timestep_multiplier, file, validation_dataset)
         print("Time Elapsed: ", datetime.now() - start_time)
     else:
         print("CUDA is not available.")

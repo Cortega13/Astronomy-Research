@@ -5,7 +5,6 @@ OUTPUT: autoencoder.pth
 """
 
 import os
-import optuna
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -17,30 +16,61 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 import torch.nn.functional as F
+from math import log10, floor
+from numba import njit
 
 ### Configurations
 def load_configurations(WORKING_PATH):
     HP = {
-        "encoded_dimensions": 11,
+        "encoded_dimensions": 4,
         "learning_rate": 0.001,
         "weight_decay": 0,
         "batch_size": 2*4096,
         "shuffle": True,
         "early_stopping_tolerance": 15,
         "max_epochs": 999999,
-        "hidden_layer": 200,
+        "hidden_layer": 400,
         "max_clipping": 6,
         "dropout_rate": 0.002,
         "exponential_coefficient": 18.6,
     }
     METADATA = ["Time", "Model"]
     PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
-    TOTAL_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/species.txt"), dtype=str, delimiter=" ").tolist()
+    GAS_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/gas_species.txt"), dtype=str, delimiter=" ").tolist()
+    BULK_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/bulk_species.txt"), dtype=str, delimiter=" ").tolist()
+    SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/surface_species.txt"), dtype=str, delimiter=" ").tolist()
 
-    return HP, METADATA, PHYSICAL_PARAMETERS, TOTAL_SPECIES
+    return HP, METADATA, PHYSICAL_PARAMETERS, GAS_SPECIES, BULK_SPECIES, SURFACE_SPECIES
 
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
-HP, METADATA, PHYSICAL_PARAMETERS, TOTAL_SPECIES = load_configurations(WORKING_PATH)
+HP, METADATA, PHYSICAL_PARAMETERS, GAS_SPECIES, BULK_SPECIES, SURFACE_SPECIES = load_configurations(WORKING_PATH)
+
+CURRENT_SPECIES = GAS_SPECIES
+CURRENT_NAME="gas_species"
+
+@njit
+def round_sig(x, sig=3):
+    if x == 0:
+        return 0
+    return round(x, sig - int(floor(log10(abs(x)))) - 1)
+
+@njit
+def round_array(arr, sig=3):
+    result = np.empty_like(arr)
+    for i in range(arr.shape[0]):
+        for j in range(arr.shape[1]):
+            result[i, j] = round_sig(arr[i, j], sig)
+    return result
+
+def remove_rounded_duplicates(df, sig=3):
+    species_only_np = df.to_numpy()
+    rounded_species_np = round_array(species_only_np, sig=sig)
+    rounded_species = pd.DataFrame(rounded_species_np, columns=df.columns, dtype=np.float32)
+    duplicates_mask = rounded_species.duplicated(keep="first")
+    df_rmduplicates = df[~duplicates_mask]
+    del df, species_only_np, rounded_species_np, rounded_species, duplicates_mask
+    return df_rmduplicates
+
 
 ### Data Processing Functions
 def load_datasets(path):
@@ -50,10 +80,13 @@ def load_datasets(path):
     training_dataset = pd.read_hdf(training_dataset_path, "autoencoder", start=0).astype(np.float32)
     validation_dataset = pd.read_hdf(validation_dataset_path, "autoencoder", start=0).astype(np.float32)
 
-    training_dataset = training_dataset[TOTAL_SPECIES]
-    validation_dataset = validation_dataset[TOTAL_SPECIES]
+    training_dataset = training_dataset[CURRENT_SPECIES]
+    validation_dataset = validation_dataset[CURRENT_SPECIES]
+    
+    rm_duplicates_training_dataset = remove_rounded_duplicates(training_dataset, sig=3).reset_index(drop=True)
+    print(f"Percent dataset after removing duplicates: {100*len(rm_duplicates_training_dataset)/len(training_dataset):.2f}%")
 
-    return training_dataset, validation_dataset
+    return rm_duplicates_training_dataset, validation_dataset
 
 
 def autoencoder_preprocessing(abundances_features):
@@ -62,7 +95,7 @@ def autoencoder_preprocessing(abundances_features):
 
     # Created using only the training data.
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    abundances_min, abundances_max = scalers["total_species"]
+    abundances_min, abundances_max = scalers[CURRENT_NAME]
 
     # Log10 Scale Abundances and then MinMax scale.
     abundances_features = np.log10(abundances_features, dtype=np.float32)
@@ -79,17 +112,17 @@ def autoencoder_preprocessing(abundances_features):
 def autoencoder_postprocessing(encoded_features):
     #print("Starting Decoder Postprocessing.")
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    abundances_min, abundances_max = scalers["total_species"]
+    abundances_min, abundances_max = scalers[CURRENT_NAME]
 
     # Moving decoder_output to cpu and convert to numpy.
     encoded_features = encoded_features.cpu().detach().numpy()
 
     # Convert the decoded_abundances to pandas dataframe with column names.
-    encoded_features = pd.DataFrame(encoded_features, columns=TOTAL_SPECIES)
+    encoded_features = pd.DataFrame(encoded_features, columns=CURRENT_SPECIES)
 
     unscaled_features = encoded_features * (abundances_max - abundances_min) + abundances_min
 
-    decoded_abundances = pd.DataFrame(10**unscaled_features, columns=TOTAL_SPECIES)
+    decoded_abundances = pd.DataFrame(10**unscaled_features, columns=CURRENT_SPECIES)
 
     return decoded_abundances
 
@@ -145,7 +178,7 @@ class VariationalAutoencoder(nn.Module):
 
 ### Defining the VAE Loss Function
 def vae_loss(reconstructed_x, x, mu, logvar, beta=3):
-    elementwise_loss = torch.abs(reconstructed_x - x)*((x+3e-2)**0.2)
+    elementwise_loss = torch.abs(reconstructed_x - x)#*((x+3e-2)**0.2)
     elementwise_loss = torch.pow(10, HP["exponential_coefficient"]*elementwise_loss)
     recon_loss = torch.sum(elementwise_loss)
     
@@ -186,7 +219,7 @@ class Trainer:
 
     def _save_checkpoint(self):
         checkpoint = self.model.module.state_dict()
-        PATH = os.path.join(WORKING_PATH, "Weights/vae.pth")
+        PATH = os.path.join(WORKING_PATH, f"Weights/{CURRENT_NAME}_vae.pth")
         torch.save(checkpoint, PATH)
 
 
@@ -201,7 +234,7 @@ class Trainer:
         average_validation_loss = self.total_loss / len(self.validation_dataloader)
         if average_validation_loss < self.minimum_loss:
             if self.gpu_id == 0:
-                print(f"New Minimum loss: {average_validation_loss:.4e}. Percent Improvement: {(average_validation_loss*100/self.minimum_loss):.3f}%")
+                print(f"New Minimum loss: {average_validation_loss:.4e}")
                 self._save_checkpoint()
             self.minimum_loss = average_validation_loss
             self.epochs_without_improvement = 0
@@ -237,10 +270,7 @@ class Trainer:
             unscaled_features_tensor = torch.tensor(unscaled_features_np, dtype=torch.float32)
             unscaled_predictions_tensor = torch.tensor(unscaled_predictions_np, dtype=torch.float32)
             
-            #self.test = (torch.abs(unscaled_predictions_tensor - unscaled_features_tensor) / unscaled_features_tensor).mean()
-            self.total_loss = (torch.abs(unscaled_features_tensor - unscaled_predictions_tensor) / unscaled_features_tensor).sum()
-            # loss = self.criterion_val(unscaled_predictions_tensor, unscaled_features_tensor)
-            # self.total_loss += loss.item()
+            self.total_loss = (torch.abs(unscaled_features_tensor - unscaled_predictions_tensor) / unscaled_features_tensor).mean()
 
 
     def _run_epoch(self, epoch):
@@ -280,7 +310,7 @@ def ddp_setup(rank, world_size):
 def load_training_objects(rank):
     model = VariationalAutoencoder(
         encoded_dimensions=HP["encoded_dimensions"],
-        num_features=len(TOTAL_SPECIES),
+        num_features=len(CURRENT_SPECIES),
         hidden_layer=HP["hidden_layer"],
         dropout_rate=HP["dropout_rate"]
         ).to(rank)
@@ -301,6 +331,9 @@ def load_training_objects(rank):
     
     criterion_train = vae_loss
     criterion_val = nn.L1Loss()
+    
+    trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of trainable parameters: {trainable_parameters}")
 
     return model, optimizer, ampscaler, criterion_train, criterion_val
 

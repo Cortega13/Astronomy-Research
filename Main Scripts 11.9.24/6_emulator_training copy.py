@@ -19,8 +19,12 @@ import torch.nn.functional as F
 import sys
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
-DATASET_FRACTION = float(sys.argv[1])
-TIMESTEP_DIFFS = int(sys.argv[2])
+try: 
+    DATASET_FRACTION = float(sys.argv[1])
+    TIMESTEP_DIFFS = int(sys.argv[2])
+except:
+    DATASET_FRACTION = 1
+    TIMESTEP_DIFFS = 1
 
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP = {
@@ -32,7 +36,7 @@ HP = {
     "early_stopping_tolerance": 12,
     "max_epochs": 999999,
     "gaussian_noise_std": 0.005,
-    "layer_sizes": [15, 256, 256, 11],
+    "layer_sizes": [17, 256, 256, 11],
     "hidden_layer": 200,
     "max_clipping": 4,
 }
