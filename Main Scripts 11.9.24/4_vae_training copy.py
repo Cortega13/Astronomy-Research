@@ -29,9 +29,9 @@ def load_configurations(WORKING_PATH):
         "shuffle": True,
         "early_stopping_tolerance": 15,
         "max_epochs": 999999,
-        "hidden_layer": 400,
+        "hidden_layer": 200,
         "max_clipping": 6,
-        "dropout_rate": 0.002,
+        "dropout_rate": 0.005,
         "exponential_coefficient": 18.6,
     }
     METADATA = ["Time", "Model"]
@@ -45,8 +45,8 @@ def load_configurations(WORKING_PATH):
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP, METADATA, PHYSICAL_PARAMETERS, GAS_SPECIES, BULK_SPECIES, SURFACE_SPECIES = load_configurations(WORKING_PATH)
 
-CURRENT_SPECIES = GAS_SPECIES
-CURRENT_NAME="gas_species"
+CURRENT_SPECIES = BULK_SPECIES
+CURRENT_NAME = "bulk_species"
 
 @njit
 def round_sig(x, sig=3):

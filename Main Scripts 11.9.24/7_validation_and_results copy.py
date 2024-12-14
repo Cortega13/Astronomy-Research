@@ -23,9 +23,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP = {
-    "encoded_dimensions": 4,
+    "encoded_dimensions": 6,
     "layer_sizes": [17, 256, 256, 11],
-    "hidden_layer": 200
+    "hidden_layer": 400
 }
 
 METADATA = ["Time", "Model"] 
@@ -37,7 +37,7 @@ SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/ut
 COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
 
 TOTAL_SPECIES = GAS_SPECIES
-CURRENT_NAME="gas_species"
+CURRENT_NAME = "gas_species"
 
 ### Data Processing Functions
 def load_datasets(path):
@@ -226,7 +226,7 @@ def load_objects(emulator_filename):
         encoded_dimensions=HP["encoded_dimensions"],
         hidden_layer=HP["hidden_layer"]
     ).to(device)
-    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, "Weights/gas_species_vae.pth")))
+    autoencoder.load_state_dict(torch.load(os.path.join(WORKING_PATH, f"Weights/{CURRENT_NAME}_vae.pth")))
     autoencoder.eval()
     
     emulator = Emulator(

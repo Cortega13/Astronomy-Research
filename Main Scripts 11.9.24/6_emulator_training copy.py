@@ -19,12 +19,6 @@ import torch.nn.functional as F
 import sys
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ### Configurations
-try: 
-    DATASET_FRACTION = float(sys.argv[1])
-    TIMESTEP_DIFFS = int(sys.argv[2])
-except:
-    DATASET_FRACTION = 1
-    TIMESTEP_DIFFS = 1
 
 WORKING_PATH = "C:/Users/carlo/Projects/Astronomy Research/"
 HP = {
@@ -40,10 +34,13 @@ HP = {
     "hidden_layer": 200,
     "max_clipping": 4,
 }
+TIMESTEP_DIFFS = 1
 
 METADATA = ["Time", "Model"] 
 PHYSICAL_PARAMETERS = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/physical_parameters.txt"), dtype=str, delimiter=" ").tolist()
-TOTAL_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/species.txt"), dtype=str, delimiter=" ").tolist()
+GAS_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/gas_species.txt"), dtype=str, delimiter=" ").tolist()
+BULK_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/bulk_species.txt"), dtype=str, delimiter=" ").tolist()
+SURFACE_SPECIES = np.loadtxt(os.path.join(WORKING_PATH, "Main Scripts 11.9.24/utils/surface_species.txt"), dtype=str, delimiter=" ").tolist()
 COMPONENTS = [f"Component_{i}" for i in range(1, HP["encoded_dimensions"]+1)]
 
 ### Data Processing Functions
@@ -56,18 +53,17 @@ def load_datasets(path):
         
     training_dataset.sort_values(by=['Model', 'Time'], inplace=True)
     validation_dataset.sort_values(by=['Model', 'Time'], inplace=True)
-    training_dataset = training_dataset[:int(DATASET_FRACTION*len(training_dataset))]
     
     return training_dataset, validation_dataset
 
 
-def autoencoder_preprocessing(abundances_features):
+def autoencoder_preprocessing(abundances_features, phase_type):
     ### Preprocesses the data for the autoencoder training. Returns a dataloader.
     print("Starting Encoder Preprocessing.")
 
     # Created using only the training data.
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    abundances_min, abundances_max = scalers["total_species"]
+    abundances_min, abundances_max = scalers[phase_type]
 
     # Log10 Scale Abundances and then MinMax scale.
     abundances_features = np.log10(abundances_features, dtype=np.float32)
@@ -94,7 +90,9 @@ def reconstruct_dataset_dataframe(encoded_dataset, dataset):
 def create_emulator_dataset(df, timesteps=TIMESTEP_DIFFS):
     print("-=+=- Creating Emulator Dataset (input, output) -=+=-")
     scalers = load(os.path.join(WORKING_PATH, "Datasets/scalers.plk"))
-    encoded_min, encoded_max = scalers["encoded_components"]
+    gas_encoded_min, gas_encoded_max = scalers["gas_species"]
+    bulk_encoded_min, bulk_encoded_max = scalers["bulk_species"]
+    surface_encoded_min, surface_encoded_max = scalers["surface_species"]
 
     df[PHYSICAL_PARAMETERS] = np.log10(df[PHYSICAL_PARAMETERS])
     for parameter in PHYSICAL_PARAMETERS:
